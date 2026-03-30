@@ -1,54 +1,23 @@
-const {
-    joinVoiceChannel,
-    createAudioPlayer,
-    createAudioResource,
-    AudioPlayerStatus,
-    VoiceConnectionStatus,
-    entersState,
-    StreamType,
-} = require("@discordjs/voice");
+const { LavaShark, Player } = require("lavashark");
 const { EmbedBuilder } = require("discord.js");
-const { execFile, execSync } = require("child_process");
 const path = require("path");
-const prism = require("prism-media");
-
-// Usar ffmpeg-static si funciona, sino el ffmpeg del sistema
-let ffmpegPath;
-try {
-    ffmpegPath = require("ffmpeg-static");
-    execSync(`"${ffmpegPath}" -version`, { stdio: "ignore" });
-} catch {
-    ffmpegPath = "ffmpeg"; // Usa el ffmpeg del sistema (apt install ffmpeg)
-    console.log("[Music] Usando ffmpeg del sistema en vez de ffmpeg-static");
-}
-const config = require("../../config.json");
 const fs = require("fs");
+const config = require("../../config.json");
 const Genius = require("genius-lyrics");
 const GeniusClient = new Genius.Client();
 
-// Detectar binario de yt-dlp según plataforma
-let YTDLP;
-if (process.platform === "win32") {
-    YTDLP = path.resolve(__dirname, "..", "..", "yt-dlp.exe");
-} else {
-    // Preferir yt-dlp de pipx (tiene plugin PO Token), sino el binario local
-    const pipxYtdlp = "/root/.local/bin/yt-dlp";
-    YTDLP = fs.existsSync(pipxYtdlp) ? pipxYtdlp : path.resolve(__dirname, "..", "..", "yt-dlp");
-    if (YTDLP === pipxYtdlp) console.log("[Music] Usando yt-dlp de pipx con PO Token plugin");
-}
 const FAVORITES_PATH = path.resolve(__dirname, "..", "data", "favorites.json");
 const MAX_FAVORITES = 50;
-const queues = new Map();
 const IDLE_TIMEOUT = 120_000;
 const MAX_PLAYLIST = 50;
 
-// ─── Filtros de audio ──────────────────────────────────────────────────────
+// ─── Filtros de audio (Lavalink) ──────────────────────────────────────────
 
 const AUDIO_FILTERS = {
-    bassboost: { af: "bass=g=20", emoji: "🔊", name: "Bass Boost" },
-    nightcore: { af: "aresample=48000,asetrate=48000*1.25", emoji: "🌙", name: "Nightcore" },
-    vaporwave: { af: "aresample=48000,asetrate=48000*0.8", emoji: "🌊", name: "Vaporwave" },
-    "8d": { af: "apulsator=hz=0.09", emoji: "🎧", name: "8D" },
+    bassboost: { equalizer: [{ band: 0, gain: 0.6 }, { band: 1, gain: 0.5 }, { band: 2, gain: 0.4 }, { band: 3, gain: 0.3 }], emoji: "🔊", name: "Bass Boost" },
+    nightcore: { timescale: { speed: 1.25, pitch: 1.25, rate: 1.0 }, emoji: "🌙", name: "Nightcore" },
+    vaporwave: { timescale: { speed: 0.8, pitch: 0.8, rate: 1.0 }, emoji: "🌊", name: "Vaporwave" },
+    "8d": { rotation: { rotationHz: 0.2 }, emoji: "🎧", name: "8D" },
 };
 
 // ─── Favoritos helpers ─────────────────────────────────────────────────────
@@ -122,8 +91,9 @@ function detectPlatform(query) {
 
 // ─── Utilidades ─────────────────────────────────────────────────────────────
 
-function formatDuration(seconds) {
-    if (!seconds || isNaN(seconds)) return "EN VIVO";
+function formatDuration(ms) {
+    if (!ms || isNaN(ms)) return "EN VIVO";
+    const seconds = Math.floor(ms / 1000);
     const hrs = Math.floor(seconds / 3600);
     const mins = Math.floor((seconds % 3600) / 60);
     const secs = seconds % 60;
@@ -131,304 +101,113 @@ function formatDuration(seconds) {
     return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
-function getQueue(guildId) {
-    return queues.get(guildId) ?? null;
-}
+// ─── LavaShark setup ────────────────────────────────────────────────────────
 
-function deleteQueue(guildId) {
-    const queue = queues.get(guildId);
-    if (queue) {
-        if (queue.idleTimer) clearTimeout(queue.idleTimer);
-        if (queue.player) queue.player.stop(true);
-        if (queue.connection) { try { queue.connection.destroy(); } catch {} }
-        queues.delete(guildId);
-    }
-}
+let lavashark = null;
 
-// ─── yt-dlp helpers ─────────────────────────────────────────────────────────
-
-// Cookies para autenticación con YouTube (evita "Sign in to confirm you're not a bot")
-const COOKIES_PATH = path.resolve(__dirname, "..", "..", "cookies.txt");
-const HAS_COOKIES = fs.existsSync(COOKIES_PATH);
-if (HAS_COOKIES) console.log("[Music] Cookies de YouTube encontradas.");
-
-// EJS necesario en todas las plataformas para resolver YouTube n-challenge
-const USE_EJS = true;
-
-function ytdlpExec(args) {
-    const baseArgs = [
-        ...(HAS_COOKIES ? ["--cookies", COOKIES_PATH] : ["--no-cookies"]),
-        "--extractor-args", "youtubetab:skip=authcheck",
-        "--extractor-args", "youtube:player_client=web",
-        ...(USE_EJS ? ["--remote-components", "ejs:github", "--js-runtimes", "node"] : []),
-    ];
-    const finalArgs = [...baseArgs, ...args];
-
-    return new Promise((resolve, reject) => {
-        execFile(YTDLP, finalArgs, { timeout: 60000, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
-            if (err) return reject(new Error(stderr?.trim()?.split("\n")[0] || err.message));
-            resolve(stdout);
-        });
+function initLavaShark(client) {
+    lavashark = new LavaShark({
+        nodes: [
+            {
+                id: "main",
+                hostname: "localhost",
+                port: 2333,
+                password: "BotArvoLavalink2026",
+            },
+        ],
+        sendWS: (guildId, payload) => {
+            const guild = client.guilds.cache.get(guildId);
+            if (guild) guild.shard.send(payload);
+        },
     });
-}
 
-/**
- * Obtiene info de un video/canción con URL directa del stream
- */
-async function getTrackInfo(query) {
-    const stdout = await ytdlpExec([
-        "--dump-single-json",
-        "--format", "bestaudio/best",
-        "--no-warnings",
-        "--no-check-certificates",
-        "--no-playlist",
-        "--default-search", "ytsearch",
-        ...(USE_EJS ? ["--js-runtimes", "node"] : []),
-        query,
-    ]);
+    lavashark.on("nodeConnect", (node) => {
+        console.log(`[Music] Lavalink conectado: ${node.identifier}`);
+    });
 
-    const info = JSON.parse(stdout);
-    const video = info.entries ? info.entries[0] : info;
-    if (!video || !video.url) throw new Error("No se encontró la canción");
+    lavashark.on("nodeError", (node, err) => {
+        console.error(`[Music] Lavalink error (${node.identifier}):`, err.message);
+    });
 
-    return {
-        title: video.title || "Sin título",
-        artist: video.uploader || video.channel || "",
-        pageUrl: video.webpage_url || video.url,
-        streamUrl: video.url,
-        duration: formatDuration(video.duration || 0),
-        durationSec: video.duration || 0,
-        httpHeaders: video.http_headers || {},
-        thumbnail: video.thumbnail || null,
-        platform: detectPlatform(video.webpage_url || query),
-    };
-}
+    lavashark.on("nodeDisconnect", (node, code, reason) => {
+        console.warn(`[Music] Lavalink desconectado (${node.identifier}): ${code} - ${reason}`);
+    });
 
-/**
- * Obtiene tracks de una playlist (YouTube, SoundCloud)
- */
-async function getPlaylistTracks(url) {
-    const stdout = await ytdlpExec([
-        "--dump-single-json",
-        "--flat-playlist",
-        "--no-warnings",
-        "--no-check-certificates",
-        ...(USE_EJS ? ["--js-runtimes", "node"] : []),
-        url,
-    ]);
+    lavashark.on("trackStart", (player, track) => {
+        const embed = nowPlayingEmbed(track, player);
+        player.metadata?.textChannel?.send({ embeds: [embed] }).catch(() => {});
+    });
 
-    const info = JSON.parse(stdout);
-    if (!info.entries || info.entries.length === 0) throw new Error("Playlist vacía o no encontrada");
-
-    const playlistTitle = info.title || "Playlist";
-    const entries = info.entries.slice(0, MAX_PLAYLIST);
-    const tracks = [];
-
-    for (const entry of entries) {
-        if (!entry.url && !entry.id) continue;
-        tracks.push({
-            title: entry.title || "Sin título",
-            artist: entry.uploader || entry.channel || "",
-            pageUrl: entry.webpage_url || entry.url || `https://www.youtube.com/watch?v=${entry.id}`,
-            // streamUrl se obtendrá al reproducir
-            streamUrl: null,
-            duration: formatDuration(entry.duration || 0),
-            durationSec: entry.duration || 0,
-            thumbnail: entry.thumbnail || null,
-            platform: "youtube",
-        });
-    }
-
-    return { playlistTitle, tracks };
-}
-
-/**
- * Obtiene tracks de Spotify (track, album, playlist)
- */
-async function getSpotifyTracks(url) {
-    const api = await initSpotify();
-    if (!api) throw new Error("Spotify no está configurado. Agrega spotifyClientId y spotifyClientSecret en config.json");
-
-    const match = url.match(/\/(track|album|playlist)\/([a-zA-Z0-9]+)/);
-    if (!match) throw new Error("URL de Spotify inválida");
-
-    const [, type, id] = match;
-    const tracks = [];
-    let playlistTitle = "Spotify";
-
-    if (type === "track") {
-        const data = await api.getTrack(id);
-        const t = data.body;
-        const artists = t.artists.map(a => a.name).join(", ");
-        tracks.push({
-            title: t.name,
-            artist: artists,
-            pageUrl: t.external_urls.spotify,
-            streamUrl: null, // Se buscará en YouTube al reproducir
-            duration: formatDuration(Math.floor(t.duration_ms / 1000)),
-            durationSec: Math.floor(t.duration_ms / 1000),
-            thumbnail: t.album?.images?.[0]?.url || null,
-            platform: "spotify",
-            searchQuery: `${t.name} ${artists}`,
-        });
-    } else if (type === "album") {
-        const data = await api.getAlbum(id);
-        playlistTitle = data.body.name;
-        for (const t of data.body.tracks.items.slice(0, MAX_PLAYLIST)) {
-            const artists = t.artists.map(a => a.name).join(", ");
-            tracks.push({
-                title: t.name,
-                artist: artists,
-                pageUrl: t.external_urls?.spotify || url,
-                streamUrl: null,
-                duration: formatDuration(Math.floor(t.duration_ms / 1000)),
-                durationSec: Math.floor(t.duration_ms / 1000),
-                thumbnail: data.body.images?.[0]?.url || null,
-                platform: "spotify",
-                searchQuery: `${t.name} ${artists}`,
-            });
+    lavashark.on("trackEnd", (player, track, reason) => {
+        if (player.metadata?.idleTimer) {
+            clearTimeout(player.metadata.idleTimer);
+            player.metadata.idleTimer = null;
         }
-    } else if (type === "playlist") {
-        const data = await api.getPlaylist(id);
-        playlistTitle = data.body.name;
-        for (const item of data.body.tracks.items.slice(0, MAX_PLAYLIST)) {
-            if (!item.track || item.track.type !== "track") continue;
-            const t = item.track;
-            const artists = t.artists.map(a => a.name).join(", ");
-            tracks.push({
-                title: t.name,
-                artist: artists,
-                pageUrl: t.external_urls?.spotify || url,
-                streamUrl: null,
-                duration: formatDuration(Math.floor(t.duration_ms / 1000)),
-                durationSec: Math.floor(t.duration_ms / 1000),
-                thumbnail: t.album?.images?.[0]?.url || null,
-                platform: "spotify",
-                searchQuery: `${t.name} ${artists}`,
-            });
-        }
-    }
-
-    return { playlistTitle, tracks };
-}
-
-/**
- * Resuelve el streamUrl de un track (busca en YouTube si es Spotify)
- */
-async function resolveStreamUrl(song) {
-    if (song.streamUrl) return song;
-
-    // Para Spotify y tracks sin stream, buscar en YouTube
-    const query = song.searchQuery || `${song.title} ${song.artist}`;
-    const resolved = await getTrackInfo(query);
-    song.streamUrl = resolved.streamUrl;
-    song.httpHeaders = resolved.httpHeaders;
-    if (!song.pageUrl || song.platform === "spotify") {
-        // Mantener la URL de Spotify como pageUrl
-    }
-    return song;
-}
-
-// ─── Audio Stream ───────────────────────────────────────────────────────────
-
-function createAudioStream(pageUrl, streamUrl, httpHeaders = {}, filter = null) {
-    const { spawn } = require("child_process");
-    const { PassThrough } = require("stream");
-
-    const filterArgs = [];
-    if (filter && AUDIO_FILTERS[filter]) {
-        filterArgs.push("-af", AUDIO_FILTERS[filter].af);
-    }
-
-    // Usar yt-dlp para descargar y pipear a FFmpeg (evita bloqueos de YouTube)
-    const ytdlpArgs = [
-        ...(HAS_COOKIES ? ["--cookies", COOKIES_PATH] : ["--no-cookies"]),
-        "--extractor-args", "youtubetab:skip=authcheck",
-        "--extractor-args", "youtube:player_client=web",
-        ...(USE_EJS ? ["--remote-components", "ejs:github", "--js-runtimes", "node"] : []),
-        "-f", "18/bestaudio/best",
-        "--no-warnings",
-        "--no-check-certificates",
-        "--no-playlist",
-        "-o", "-",
-        pageUrl,
-    ];
-
-    const ytdlp = spawn(YTDLP, ytdlpArgs, { stdio: ["ignore", "pipe", "pipe"] });
-
-    ytdlp.stderr.on("data", (data) => {
-        const msg = data.toString().trim();
-        if (msg && !msg.includes("[download]")) console.log("[Music] yt-dlp:", msg);
     });
 
-    // FFmpeg convierte a PCM raw
-    const ffmpeg = spawn(ffmpegPath, [
-        "-analyzeduration", "0",
-        "-loglevel", "error",
-        "-i", "pipe:0",
-        ...filterArgs,
-        "-f", "s16le",
-        "-ar", "48000",
-        "-ac", "2",
-        "pipe:1",
-    ], { stdio: ["pipe", "pipe", "pipe"] });
-
-    // Conectar yt-dlp → FFmpeg
-    ytdlp.stdout.pipe(ffmpeg.stdin).on("error", () => {});
-
-    // PassThrough para garantizar un Readable limpio para @discordjs/voice
-    const output = new PassThrough();
-    ffmpeg.stdout.pipe(output).on("error", () => {});
-
-    ytdlp.on("error", (err) => console.error("[Music] yt-dlp spawn error:", err.message));
-    ffmpeg.on("error", () => {});
-    ffmpeg.stderr.on("data", (data) => {
-        const msg = data.toString().trim();
-        if (msg) console.error("[Music] FFmpeg error:", msg);
+    lavashark.on("trackException", (player, track, exception) => {
+        console.error(`[Music] Error al reproducir "${track.title}":`, exception.message);
+        player.metadata?.textChannel?.send(`❌ Error al reproducir **${track.title}**. Saltando...`).catch(() => {});
+        player.skip();
     });
 
-    // Limpieza cuando uno termina
-    ytdlp.on("close", () => { try { ffmpeg.stdin.end(); } catch {} });
-    ffmpeg.on("close", () => { try { ytdlp.kill(); } catch {} output.end(); });
+    lavashark.on("trackStuck", (player, track, thresholdMs) => {
+        console.warn(`[Music] Track stuck: "${track.title}" (${thresholdMs}ms)`);
+        player.metadata?.textChannel?.send(`⚠️ **${track.title}** se trabó. Saltando...`).catch(() => {});
+        player.skip();
+    });
 
-    // Guardar referencias para poder limpiar desde fuera
-    output._ytdlp = ytdlp;
-    output._ffmpeg = ffmpeg;
+    lavashark.on("queueEnd", (player) => {
+        const timeout = setTimeout(() => {
+            if (player.queue.tracks.length === 0) {
+                player.metadata?.textChannel?.send("⏹️ Me desconecto por inactividad.").catch(() => {});
+                player.destroy();
+            }
+        }, IDLE_TIMEOUT);
+        if (player.metadata) player.metadata.idleTimer = timeout;
+    });
 
-    return output;
+    // Manejar eventos raw de Discord para la conexión de voz
+    client.on("raw", (packet) => {
+        lavashark.handleVoiceUpdate(packet);
+    });
+
+    lavashark.start(client.user.id);
+    console.log("[Music] LavaShark iniciado.");
 }
 
 // ─── Embeds ─────────────────────────────────────────────────────────────────
 
-function getPlatformEmoji(platform) {
-    if (platform?.includes("spotify")) return "🟢";
-    if (platform?.includes("soundcloud")) return "🟠";
-    if (platform === "direct") return "🔗";
+function getPlatformEmoji(uri) {
+    if (uri?.includes("spotify")) return "🟢";
+    if (uri?.includes("soundcloud")) return "🟠";
+    if (uri?.includes("http") && !uri?.includes("youtube")) return "🔗";
     return "🔴";
 }
 
-function nowPlayingEmbed(song) {
-    const emoji = getPlatformEmoji(song.platform);
+function nowPlayingEmbed(track, player) {
+    const emoji = getPlatformEmoji(track.uri);
+    const requestedBy = track.requestedBy || "Desconocido";
     return new EmbedBuilder()
         .setColor(0x5865f2)
         .setTitle("🎵 Reproduciendo")
-        .setDescription(`${emoji} [${song.title}](${song.pageUrl})`)
+        .setDescription(`${emoji} [${track.title}](${track.uri})`)
         .addFields(
-            { name: "Duración", value: song.duration, inline: true },
-            { name: "Pedida por", value: song.requestedBy, inline: true },
+            { name: "Duración", value: formatDuration(track.duration), inline: true },
+            { name: "Pedida por", value: requestedBy, inline: true },
         )
-        .setThumbnail(song.thumbnail || null)
+        .setThumbnail(track.thumbnail || null)
         .setTimestamp();
 }
 
-function addedToQueueEmbed(song, position) {
-    const emoji = getPlatformEmoji(song.platform);
+function addedToQueueEmbed(track, position) {
+    const emoji = getPlatformEmoji(track.uri);
     return new EmbedBuilder()
         .setColor(0x2ecc71)
         .setTitle("✅ Añadida a la cola")
-        .setDescription(`${emoji} [${song.title}](${song.pageUrl})`)
+        .setDescription(`${emoji} [${track.title}](${track.uri})`)
         .addFields(
-            { name: "Duración", value: song.duration, inline: true },
+            { name: "Duración", value: formatDuration(track.duration), inline: true },
             { name: "Posición", value: `#${position}`, inline: true },
         )
         .setTimestamp();
@@ -443,18 +222,18 @@ function playlistAddedEmbed(playlistTitle, count, platform) {
         .setTimestamp();
 }
 
-function queueEmbed(queue) {
-    const current = queue.songs[0];
-    const upcoming = queue.songs.slice(1);
-    const emoji = getPlatformEmoji(current.platform);
+function queueEmbed(player) {
+    const current = player.current;
+    const upcoming = player.queue.tracks;
+    const emoji = getPlatformEmoji(current?.uri);
 
-    let description = `**Reproduciendo:**\n${emoji} [${current.title}](${current.pageUrl}) — ${current.duration}\n`;
+    let description = `**Reproduciendo:**\n${emoji} [${current.title}](${current.uri}) — ${formatDuration(current.duration)}\n`;
 
     if (upcoming.length > 0) {
         description += "\n**En cola:**\n";
-        upcoming.slice(0, 15).forEach((song, i) => {
-            const e = getPlatformEmoji(song.platform);
-            description += `\`${i + 1}.\` ${e} [${song.title}](${song.pageUrl}) — ${song.duration}\n`;
+        upcoming.slice(0, 15).forEach((track, i) => {
+            const e = getPlatformEmoji(track.uri);
+            description += `\`${i + 1}.\` ${e} [${track.title}](${track.uri}) — ${formatDuration(track.duration)}\n`;
         });
         if (upcoming.length > 15) description += `\n...y **${upcoming.length - 15}** más.`;
     } else {
@@ -465,127 +244,76 @@ function queueEmbed(queue) {
         .setColor(0x5865f2)
         .setTitle("📜 Cola de reproducción")
         .setDescription(description)
-        .setFooter({ text: `${queue.songs.length} canción(es)` })
+        .setFooter({ text: `${upcoming.length + 1} canción(es)` })
         .setTimestamp();
 }
 
-// ─── Reproducción interna ───────────────────────────────────────────────────
+// ─── Resolver Spotify → búsqueda en YouTube ────────────────────────────────
 
-async function playSong(guildId) {
-    const queue = getQueue(guildId);
-    if (!queue) return;
+async function resolveSpotifyTracks(url) {
+    const api = await initSpotify();
+    if (!api) throw new Error("Spotify no está configurado. Agrega spotifyClientId y spotifyClientSecret en config.json");
 
-    if (queue.songs.length === 0) {
-        queue.playing = false;
-        queue.idleTimer = setTimeout(() => {
-            const q = getQueue(guildId);
-            if (q && q.songs.length === 0) {
-                q.textChannel.send("⏹️ Me desconecto por inactividad.").catch(() => {});
-                deleteQueue(guildId);
-            }
-        }, IDLE_TIMEOUT);
-        return;
+    const match = url.match(/\/(track|album|playlist)\/([a-zA-Z0-9]+)/);
+    if (!match) throw new Error("URL de Spotify inválida");
+
+    const [, type, id] = match;
+    const queries = [];
+    let playlistTitle = "Spotify";
+
+    if (type === "track") {
+        const data = await api.getTrack(id);
+        const t = data.body;
+        const artists = t.artists.map(a => a.name).join(", ");
+        queries.push({ query: `${t.name} ${artists}`, title: t.name });
+    } else if (type === "album") {
+        const data = await api.getAlbum(id);
+        playlistTitle = data.body.name;
+        for (const t of data.body.tracks.items.slice(0, MAX_PLAYLIST)) {
+            const artists = t.artists.map(a => a.name).join(", ");
+            queries.push({ query: `${t.name} ${artists}`, title: t.name });
+        }
+    } else if (type === "playlist") {
+        const data = await api.getPlaylist(id);
+        playlistTitle = data.body.name;
+        for (const item of data.body.tracks.items.slice(0, MAX_PLAYLIST)) {
+            if (!item.track || item.track.type !== "track") continue;
+            const t = item.track;
+            const artists = t.artists.map(a => a.name).join(", ");
+            queries.push({ query: `${t.name} ${artists}`, title: t.name });
+        }
     }
 
-    if (queue.idleTimer) { clearTimeout(queue.idleTimer); queue.idleTimer = null; }
-
-    const song = queue.songs[0];
-    queue.playing = true;
-
-    try {
-        // Resolver streamUrl si no lo tiene (Spotify, playlist items)
-        await resolveStreamUrl(song);
-
-        if (!song.streamUrl) throw new Error("No se pudo obtener el stream de audio");
-
-        console.log(`[Music] Reproduciendo: ${song.pageUrl}`);
-        const audioStream = createAudioStream(song.pageUrl, song.streamUrl, song.httpHeaders || {}, queue.filter || null);
-
-        audioStream.on("data", () => {
-            if (!audioStream._loggedData) {
-                console.log("[Music] Audio streaming ✓");
-                audioStream._loggedData = true;
-            }
-        });
-        audioStream.on("error", () => {});
-
-        const resource = createAudioResource(audioStream, { inputType: StreamType.Raw, inlineVolume: true });
-        resource.volume?.setVolume(1);
-        queue.player.play(resource);
-
-        console.log(`[Music] Player state: ${queue.player.state.status}`);
-        console.log(`[Music] Connection state: ${queue.connection.state.status}`);
-        console.log(`[Music] Connection subscriptions: ${queue.connection.state.subscription ? 'SI' : 'NO'}`);
-
-        await queue.textChannel.send({ embeds: [nowPlayingEmbed(song)] }).catch(() => {});
-    } catch (error) {
-        console.error(`[Music] Error al reproducir "${song.title}":`, error.message);
-        await queue.textChannel.send(`❌ Error al reproducir **${song.title}**. Saltando...`).catch(() => {});
-        queue.songs.shift();
-        return playSong(guildId);
-    }
+    return { playlistTitle, queries };
 }
 
-// ─── Crear/obtener cola ─────────────────────────────────────────────────────
+// ─── Obtener o crear player ─────────────────────────────────────────────────
 
-async function ensureQueue(message) {
+function getOrCreatePlayer(message) {
     const voiceChannel = message.member?.voice?.channel;
-    let queue = getQueue(message.guild.id);
+    if (!voiceChannel) throw new Error("Debes estar en un canal de voz.");
 
-    if (queue) {
-        queue.textChannel = message.channel;
-        return queue;
+    const botPerms = voiceChannel.permissionsFor(message.guild.members.me);
+    if (!botPerms.has("Connect") || !botPerms.has("Speak")) {
+        throw new Error("No tengo permisos para unirme o hablar en ese canal.");
     }
 
-    const player = createAudioPlayer();
-    let connection;
+    let player = lavashark.getPlayer(message.guild.id);
 
-    try {
-        console.log(`[Music] Conectando al canal: ${voiceChannel.name} (${voiceChannel.id})`);
-        connection = joinVoiceChannel({
-            channelId: voiceChannel.id,
+    if (!player) {
+        player = lavashark.createPlayer({
             guildId: message.guild.id,
-            adapterCreator: message.guild.voiceAdapterCreator,
+            voiceChannelId: voiceChannel.id,
+            textChannelId: message.channel.id,
             selfDeaf: true,
             selfMute: false,
         });
-        connection.on("stateChange", (old, curr) => {
-            console.log(`[Music] Voice state: ${old.status} -> ${curr.status}`);
-        });
-        await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
-    } catch (err) {
-        console.error("[Music] Error al conectar al canal de voz:", err);
-        if (connection) try { connection.destroy(); } catch {}
-        throw new Error("No pude conectarme al canal de voz.");
+        player.metadata = { textChannel: message.channel, idleTimer: null };
+    } else {
+        player.metadata = { ...player.metadata, textChannel: message.channel };
     }
 
-    queue = { songs: [], connection, player, playing: false, textChannel: message.channel, idleTimer: null, filter: null };
-    queues.set(message.guild.id, queue);
-    connection.subscribe(player);
-
-    const guildId = message.guild.id;
-
-    player.on(AudioPlayerStatus.Idle, () => {
-        const q = getQueue(guildId);
-        if (q) { q.songs.shift(); playSong(guildId); }
-    });
-
-    player.on("error", (error) => {
-        console.error("[Music] AudioPlayer error:", error.message);
-        const q = getQueue(guildId);
-        if (q) { q.textChannel.send("❌ Error. Saltando...").catch(() => {}); q.songs.shift(); playSong(guildId); }
-    });
-
-    connection.on(VoiceConnectionStatus.Disconnected, async () => {
-        try {
-            await Promise.race([
-                entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
-                entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
-            ]);
-        } catch { deleteQueue(guildId); }
-    });
-
-    return queue;
+    return player;
 }
 
 // ─── Comandos ───────────────────────────────────────────────────────────────
@@ -597,72 +325,84 @@ async function handlePlay(message) {
     const voiceChannel = message.member?.voice?.channel;
     if (!voiceChannel) return message.reply("❌ Debes estar en un canal de voz.");
 
-    const botPerms = voiceChannel.permissionsFor(message.guild.members.me);
-    if (!botPerms.has("Connect") || !botPerms.has("Speak")) {
-        return message.reply("❌ No tengo permisos para unirme o hablar en ese canal.");
-    }
-
     const platform = detectPlatform(args);
     const searching = await message.reply(`🔍 Buscando en ${platform.includes("spotify") ? "Spotify" : platform.includes("soundcloud") ? "SoundCloud" : "YouTube"}...`);
 
     try {
         const requestedBy = message.author.displayName ?? message.author.username;
-        let queue;
+        const player = getOrCreatePlayer(message);
 
-        // ─── Playlists / Albums ───
-        if (platform === "youtube-playlist" || platform === "soundcloud-playlist") {
-            const { playlistTitle, tracks } = await getPlaylistTracks(args);
-            if (tracks.length === 0) return searching.edit("❌ Playlist vacía.");
-
-            tracks.forEach(t => { t.requestedBy = requestedBy; });
-
-            queue = await ensureQueue(message);
-            const wasEmpty = queue.songs.length === 0;
-            queue.songs.push(...tracks);
-
-            await searching.edit({ content: null, embeds: [playlistAddedEmbed(playlistTitle, tracks.length, platform)] });
-
-            if (wasEmpty) playSong(message.guild.id);
-            return;
+        // Conectar si no está conectado
+        if (!player.connected) {
+            await player.connect();
         }
 
+        // ─── Spotify ───
         if (platform.startsWith("spotify")) {
-            const { playlistTitle, tracks } = await getSpotifyTracks(args);
-            if (tracks.length === 0) return searching.edit("❌ No se encontraron tracks en Spotify.");
+            const { playlistTitle, queries } = await resolveSpotifyTracks(args);
+            if (queries.length === 0) return searching.edit("❌ No se encontraron tracks en Spotify.");
 
-            tracks.forEach(t => { t.requestedBy = requestedBy; });
-
-            queue = await ensureQueue(message);
-            const wasEmpty = queue.songs.length === 0;
-            queue.songs.push(...tracks);
-
-            if (tracks.length === 1) {
-                await searching.delete().catch(() => {});
-            } else {
-                await searching.edit({ content: null, embeds: [playlistAddedEmbed(playlistTitle, tracks.length, "spotify")] });
+            let added = 0;
+            for (const q of queries) {
+                try {
+                    const result = await lavashark.search(`ytsearch:${q.query}`);
+                    if (result.tracks.length > 0) {
+                        const track = result.tracks[0];
+                        track.requestedBy = requestedBy;
+                        player.queue.add(track);
+                        added++;
+                    }
+                } catch {}
             }
 
-            if (wasEmpty) playSong(message.guild.id);
+            if (added === 0) return searching.edit("❌ No se encontraron canciones.");
+
+            if (queries.length === 1) {
+                await searching.delete().catch(() => {});
+            } else {
+                await searching.edit({ content: null, embeds: [playlistAddedEmbed(playlistTitle, added, "spotify")] });
+            }
+
+            if (!player.playing) player.play();
             return;
         }
 
-        // ─── Track individual (YouTube, SoundCloud, Direct, Búsqueda) ───
-        const info = await getTrackInfo(args);
-        const songInfo = {
-            ...info,
-            requestedBy,
-        };
+        // ─── YouTube, SoundCloud, Direct, Búsqueda ───
+        let query = args;
+        if (platform === "search") {
+            query = `ytsearch:${args}`;
+        }
+
+        const result = await lavashark.search(query);
+
+        if (!result || (!result.tracks?.length && !result.playlistInfo?.name)) {
+            return searching.edit("❌ No se encontró ningún resultado.");
+        }
+
+        // Playlist de YouTube/SoundCloud
+        if (result.loadType === "playlist") {
+            const tracks = result.tracks.slice(0, MAX_PLAYLIST);
+            tracks.forEach(t => { t.requestedBy = requestedBy; });
+            player.queue.add(tracks);
+
+            await searching.edit({ content: null, embeds: [playlistAddedEmbed(result.playlistInfo.name, tracks.length, platform)] });
+
+            if (!player.playing) player.play();
+            return;
+        }
+
+        // Track individual
+        const track = result.tracks[0];
+        track.requestedBy = requestedBy;
+        player.queue.add(track);
 
         await searching.delete().catch(() => {});
 
-        queue = await ensureQueue(message);
-        queue.songs.push(songInfo);
-
-        if (!queue.playing) {
-            return playSong(message.guild.id);
+        if (!player.playing) {
+            player.play();
+        } else {
+            await message.channel.send({ embeds: [addedToQueueEmbed(track, player.queue.tracks.length)] });
         }
-
-        return message.channel.send({ embeds: [addedToQueueEmbed(songInfo, queue.songs.length - 1)] });
 
     } catch (error) {
         console.error("[Music] Error:", error.message);
@@ -671,58 +411,59 @@ async function handlePlay(message) {
 }
 
 async function handleSkip(message) {
-    const queue = getQueue(message.guild.id);
-    if (!queue || !queue.playing) return message.reply("❌ No hay nada reproduciéndose.");
+    const player = lavashark.getPlayer(message.guild.id);
+    if (!player || !player.playing) return message.reply("❌ No hay nada reproduciéndose.");
     if (!message.member?.voice?.channel) return message.reply("❌ Debes estar en un canal de voz.");
     if (!isDJ(message.member)) return message.reply("❌ Necesitas el rol **DJ** o permiso de `Gestionar Mensajes` para usar este comando.");
-    const skipped = queue.songs[0];
-    queue.player.stop();
-    return message.channel.send(`⏭️ Se saltó **${skipped?.title ?? "la canción"}**.`);
+    const title = player.current?.title ?? "la canción";
+    player.skip();
+    return message.channel.send(`⏭️ Se saltó **${title}**.`);
 }
 
 async function handleStop(message) {
-    if (!getQueue(message.guild.id)) return message.reply("❌ No hay nada reproduciéndose.");
+    const player = lavashark.getPlayer(message.guild.id);
+    if (!player) return message.reply("❌ No hay nada reproduciéndose.");
     if (!message.member?.voice?.channel) return message.reply("❌ Debes estar en un canal de voz.");
     if (!isDJ(message.member)) return message.reply("❌ Necesitas el rol **DJ** o permiso de `Gestionar Mensajes` para usar este comando.");
     await message.channel.send("⏹️ Reproducción detenida.");
-    deleteQueue(message.guild.id);
+    player.destroy();
 }
 
 async function handleQueue(message) {
-    const queue = getQueue(message.guild.id);
-    if (!queue || queue.songs.length === 0) return message.reply("📭 La cola está vacía.");
-    return message.channel.send({ embeds: [queueEmbed(queue)] });
+    const player = lavashark.getPlayer(message.guild.id);
+    if (!player || !player.current) return message.reply("📭 La cola está vacía.");
+    return message.channel.send({ embeds: [queueEmbed(player)] });
 }
 
 async function handlePause(message) {
-    const queue = getQueue(message.guild.id);
-    if (!queue || !queue.playing) return message.reply("❌ No hay nada reproduciéndose.");
+    const player = lavashark.getPlayer(message.guild.id);
+    if (!player || !player.playing) return message.reply("❌ No hay nada reproduciéndose.");
     if (!message.member?.voice?.channel) return message.reply("❌ Debes estar en un canal de voz.");
-    if (queue.player.state.status === AudioPlayerStatus.Paused) return message.reply("⚠️ Ya está pausado.");
-    queue.player.pause();
+    if (player.paused) return message.reply("⚠️ Ya está pausado.");
+    player.pause();
     return message.channel.send("⏸️ Pausado. Usa `!resume` para reanudar.");
 }
 
 async function handleResume(message) {
-    const queue = getQueue(message.guild.id);
-    if (!queue) return message.reply("❌ No hay nada en la cola.");
+    const player = lavashark.getPlayer(message.guild.id);
+    if (!player) return message.reply("❌ No hay nada en la cola.");
     if (!message.member?.voice?.channel) return message.reply("❌ Debes estar en un canal de voz.");
-    if (queue.player.state.status !== AudioPlayerStatus.Paused) return message.reply("⚠️ No está pausado.");
-    queue.player.unpause();
+    if (!player.paused) return message.reply("⚠️ No está pausado.");
+    player.resume();
     return message.channel.send("▶️ Reanudado.");
 }
 
 async function handleNowPlaying(message) {
-    const queue = getQueue(message.guild.id);
-    if (!queue || !queue.playing || queue.songs.length === 0) return message.reply("❌ No hay nada reproduciéndose.");
-    return message.channel.send({ embeds: [nowPlayingEmbed(queue.songs[0])] });
+    const player = lavashark.getPlayer(message.guild.id);
+    if (!player || !player.current) return message.reply("❌ No hay nada reproduciéndose.");
+    return message.channel.send({ embeds: [nowPlayingEmbed(player.current, player)] });
 }
 
 // ─── Filtros de audio (comando) ────────────────────────────────────────────
 
 async function handleFilter(message) {
-    const queue = getQueue(message.guild.id);
-    if (!queue || !queue.playing) return message.reply("❌ No hay nada reproduciéndose.");
+    const player = lavashark.getPlayer(message.guild.id);
+    if (!player || !player.playing) return message.reply("❌ No hay nada reproduciéndose.");
     if (!message.member?.voice?.channel) return message.reply("❌ Debes estar en un canal de voz.");
     if (!isDJ(message.member)) return message.reply("❌ Necesitas el rol **DJ** o permiso de `Gestionar Mensajes` para usar este comando.");
 
@@ -734,7 +475,7 @@ async function handleFilter(message) {
     }
 
     if (filterName === "off") {
-        queue.filter = null;
+        await player.filters.set({});
         await message.channel.send({
             embeds: [new EmbedBuilder()
                 .setColor(0x5865f2)
@@ -743,8 +484,14 @@ async function handleFilter(message) {
                 .setTimestamp()],
         });
     } else {
-        const info = AUDIO_FILTERS[filterName];
-        queue.filter = filterName;
+        const filterConfig = AUDIO_FILTERS[filterName];
+        const filters = {};
+        if (filterConfig.equalizer) filters.equalizer = filterConfig.equalizer;
+        if (filterConfig.timescale) filters.timescale = filterConfig.timescale;
+        if (filterConfig.rotation) filters.rotation = filterConfig.rotation;
+        await player.filters.set(filters);
+
+        const info = filterConfig;
         await message.channel.send({
             embeds: [new EmbedBuilder()
                 .setColor(0x5865f2)
@@ -753,32 +500,17 @@ async function handleFilter(message) {
                 .setTimestamp()],
         });
     }
-
-    // Reiniciar la canción actual con el nuevo filtro
-    const song = queue.songs[0];
-    if (song) {
-        try {
-            await resolveStreamUrl(song);
-            const audioStream = createAudioStream(song.pageUrl, song.streamUrl, song.httpHeaders || {}, queue.filter);
-            const resource = createAudioResource(audioStream, { inputType: StreamType.Raw, inlineVolume: true });
-            resource.volume?.setVolume(1);
-            queue.player.play(resource);
-        } catch (error) {
-            console.error("[Music] Error al aplicar filtro:", error.message);
-            message.channel.send("❌ Error al aplicar el filtro.").catch(() => {});
-        }
-    }
 }
 
 // ─── Favoritos ─────────────────────────────────────────────────────────────
 
 async function handleFav(message) {
-    const queue = getQueue(message.guild.id);
-    if (!queue || !queue.playing || queue.songs.length === 0) {
+    const player = lavashark.getPlayer(message.guild.id);
+    if (!player || !player.current) {
         return message.reply("❌ No hay nada reproduciéndose para guardar.");
     }
 
-    const song = queue.songs[0];
+    const track = player.current;
     const userId = message.author.id;
     const favorites = loadFavorites();
 
@@ -788,13 +520,13 @@ async function handleFav(message) {
         return message.reply(`❌ Ya tienes el máximo de **${MAX_FAVORITES}** favoritos. Elimina alguno con \`!favdel <número>\`.`);
     }
 
-    const alreadyExists = favorites[userId].some(f => f.pageUrl === song.pageUrl);
+    const alreadyExists = favorites[userId].some(f => f.pageUrl === track.uri);
     if (alreadyExists) return message.reply("⚠️ Esta canción ya está en tus favoritos.");
 
     favorites[userId].push({
-        title: song.title,
-        pageUrl: song.pageUrl,
-        searchQuery: song.searchQuery || `${song.title} ${song.artist || ""}`.trim(),
+        title: track.title,
+        pageUrl: track.uri,
+        searchQuery: `${track.title} ${track.author || ""}`.trim(),
     });
     saveFavorites(favorites);
 
@@ -802,7 +534,7 @@ async function handleFav(message) {
         embeds: [new EmbedBuilder()
             .setColor(0x2ecc71)
             .setTitle("⭐ Añadida a favoritos")
-            .setDescription(`**${song.title}** se guardó en tus favoritos.\nTienes **${favorites[userId].length}/${MAX_FAVORITES}** favoritos.`)
+            .setDescription(`**${track.title}** se guardó en tus favoritos.\nTienes **${favorites[userId].length}/${MAX_FAVORITES}** favoritos.`)
             .setTimestamp()],
     });
 }
@@ -840,7 +572,6 @@ async function handleFavPlay(message) {
     }
 
     const fav = userFavs[num - 1];
-    // Simular el comando !play con la query del favorito
     message.content = `!play ${fav.searchQuery || fav.pageUrl}`;
     return handlePlay(message);
 }
@@ -875,11 +606,11 @@ async function handleLyrics(message) {
     let searchTitle = args;
 
     if (!searchTitle) {
-        const queue = getQueue(message.guild.id);
-        if (!queue || !queue.playing || queue.songs.length === 0) {
+        const player = lavashark.getPlayer(message.guild.id);
+        if (!player || !player.current) {
             return message.reply("❌ No hay nada reproduciéndose. Usa `!lyrics <nombre de canción>` para buscar letras.");
         }
-        searchTitle = queue.songs[0].title;
+        searchTitle = player.current.title;
     }
 
     const searching = await message.reply(`🔍 Buscando letras de **${searchTitle}**...`);
@@ -894,7 +625,6 @@ async function handleLyrics(message) {
         const lyrics = await song.lyrics();
         if (!lyrics) return searching.edit(`❌ No se encontraron letras para **${searchTitle}**.`);
 
-        // Paginar si es muy largo
         const chunks = [];
         const maxLen = 4000;
         let remaining = lyrics;
@@ -903,7 +633,6 @@ async function handleLyrics(message) {
                 chunks.push(remaining);
                 break;
             }
-            // Cortar en el último salto de línea antes del límite
             let cutIndex = remaining.lastIndexOf("\n", maxLen);
             if (cutIndex === -1) cutIndex = maxLen;
             chunks.push(remaining.substring(0, cutIndex));
@@ -931,6 +660,7 @@ async function handleLyrics(message) {
 }
 
 module.exports = {
+    initLavaShark,
     handlePlay, handleSkip, handleStop, handleQueue, handlePause, handleResume, handleNowPlaying,
     handleFilter, handleFav, handleFavList, handleFavPlay, handleFavDel, handleLyrics,
 };

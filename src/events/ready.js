@@ -2,6 +2,7 @@ const { checkGiveaways } = require("../modules/giveaways");
 const { setupStatsInterval } = require("../modules/serverStats");
 const { setupStatusInterval } = require("../modules/botStatus");
 const { embedCommand } = require("../modules/customEmbed");
+const { initLavaShark } = require("../modules/music");
 
 module.exports = {
     name: "clientReady",
@@ -32,6 +33,9 @@ module.exports = {
 
         // Iniciar panel de estado del bot (canal 1320609986560135230)
         setupStatusInterval(client);
+
+        // Iniciar LavaShark para música
+        initLavaShark(client);
 
         console.log("📦 Módulos cargados: tickets, verificación, autoroles, niveles, sugerencias, giveaways, catálogo, reviews, stats, automod, transcripciones");
     },
