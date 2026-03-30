@@ -323,43 +323,67 @@ async function resolveStreamUrl(song) {
 
 // ─── Audio Stream ───────────────────────────────────────────────────────────
 
-function createAudioStream(streamUrl, httpHeaders = {}, filter = null) {
-    const headerArgs = [];
-    for (const [key, value] of Object.entries(httpHeaders)) {
-        if (key && value && key.toLowerCase() !== "accept-encoding") {
-            headerArgs.push("-headers", `${key}: ${value}\r\n`);
-        }
-    }
+function createAudioStream(pageUrl, streamUrl, httpHeaders = {}, filter = null) {
+    const { spawn } = require("child_process");
 
     const filterArgs = [];
     if (filter && AUDIO_FILTERS[filter]) {
         filterArgs.push("-af", AUDIO_FILTERS[filter].af);
     }
 
-    const ffmpeg = new prism.FFmpeg({
-        command: ffmpegPath,
-        args: [
-            ...headerArgs,
-            "-reconnect", "1",
-            "-reconnect_streamed", "1",
-            "-reconnect_delay_max", "5",
-            "-analyzeduration", "0",
-            "-loglevel", "0",
-            "-i", streamUrl,
-            ...filterArgs,
-            "-f", "s16le",
-            "-ar", "48000",
-            "-ac", "2",
-        ],
+    // Usar yt-dlp para descargar y pipear a FFmpeg (evita bloqueos de YouTube)
+    const ytdlpArgs = [
+        ...(HAS_COOKIES ? ["--cookies", COOKIES_PATH] : []),
+        "--extractor-args", "youtubetab:skip=authcheck",
+        "--extractor-args", "youtube:player_client=web",
+        "--remote-components", "ejs:github",
+        "--js-runtimes", "node",
+        "-f", "bestaudio/best",
+        "--no-warnings",
+        "--no-check-certificates",
+        "--no-playlist",
+        "-o", "-", // Output a stdout
+        pageUrl,
+    ];
+
+    const ytdlp = spawn(YTDLP, ytdlpArgs, { stdio: ["ignore", "pipe", "pipe"] });
+
+    ytdlp.stderr.on("data", (data) => {
+        const msg = data.toString().trim();
+        if (msg) console.log("[Music] yt-dlp:", msg);
     });
 
+    // Pipear yt-dlp → FFmpeg para convertir a PCM
+    const ffmpeg = spawn(ffmpegPath, [
+        "-analyzeduration", "0",
+        "-loglevel", "warning",
+        "-i", "pipe:0",     // Leer de stdin (pipe de yt-dlp)
+        ...filterArgs,
+        "-f", "s16le",
+        "-ar", "48000",
+        "-ac", "2",
+        "pipe:1",           // Salida a stdout
+    ], { stdio: ["pipe", "pipe", "pipe"] });
+
+    // Conectar yt-dlp stdout → FFmpeg stdin
+    ytdlp.stdout.pipe(ffmpeg.stdin);
+
+    ytdlp.on("error", (err) => console.error("[Music] yt-dlp spawn error:", err.message));
     ffmpeg.on("error", (err) => {
         if (!err.message?.includes("Premature close")) {
             console.error("[Music] FFmpeg error:", err.message);
         }
     });
+    ffmpeg.stderr.on("data", (data) => {
+        const msg = data.toString().trim();
+        if (msg) console.log("[Music] FFmpeg:", msg);
+    });
 
-    return ffmpeg;
+    // Cuando uno muere, cerrar el otro
+    ytdlp.on("close", () => { try { ffmpeg.stdin.end(); } catch {} });
+    ffmpeg.on("close", () => { try { ytdlp.kill(); } catch {} });
+
+    return ffmpeg.stdout;
 }
 
 // ─── Embeds ─────────────────────────────────────────────────────────────────
@@ -462,8 +486,8 @@ async function playSong(guildId) {
 
         if (!song.streamUrl) throw new Error("No se pudo obtener el stream de audio");
 
-        console.log(`[Music] Stream URL obtenida: ${song.streamUrl?.substring(0, 80)}...`);
-        const audioStream = createAudioStream(song.streamUrl, song.httpHeaders || {}, queue.filter || null);
+        console.log(`[Music] Reproduciendo: ${song.pageUrl}`);
+        const audioStream = createAudioStream(song.pageUrl, song.streamUrl, song.httpHeaders || {}, queue.filter || null);
 
         audioStream.on("data", () => {
             if (!audioStream._loggedData) {
@@ -718,7 +742,7 @@ async function handleFilter(message) {
     if (song) {
         try {
             await resolveStreamUrl(song);
-            const audioStream = createAudioStream(song.streamUrl, song.httpHeaders || {}, queue.filter);
+            const audioStream = createAudioStream(song.pageUrl, song.streamUrl, song.httpHeaders || {}, queue.filter);
             const resource = createAudioResource(audioStream, { inputType: StreamType.Raw, inlineVolume: true });
             resource.volume?.setVolume(1);
             queue.player.play(resource);
