@@ -1,0 +1,19 @@
+{
+    "token": "TU_TOKEN_AQUI",
+    "token2": "",
+    "logChannelId": "",
+    "messageLogChannelId": "",
+    "welcomeChannelId": "",
+    "goodbyeChannelId": "",
+    "autoRoleId": "",
+    "ticketCategoryId": "",
+    "staffRoleId": "",
+    "ticketBannerURL": "banner_tickets.png",
+    "studioName": "ArvoStudios",
+    "verifiedRoleId": "",
+    "suggestionsChannelId": "",
+    "reviewsChannelId": "",
+    "levelUpChannelId": "",
+    "spotifyClientId": "",
+    "spotifyClientSecret": ""
+}

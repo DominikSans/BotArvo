@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e \":*)",
+      "Bash(node -e \"try{require\\(''./src/modules/music''\\);console.log\\(''✅ music''\\);require\\(''./src/modules/utility''\\);console.log\\(''✅ utility''\\);require\\(''./src/events/messageCreate''\\);console.log\\(''✅ messageCreate''\\)}catch\\(e\\){console.log\\(''❌'',e.message\\)}\")",
+      "Bash(\"e:/BOTS DISCORD/BotArvo/src/data/favorites.json\")",
+      "Bash(node -e \"const m=[''modAdvanced'',''smartSlowmode'',''auditLogs'',''welcome''];let ok=0;for\\(const n of m\\){try{require\\(''./src/modules/''+n\\);ok++;console.log\\(''✅ ''+n\\)}catch\\(e\\){console.log\\(''❌ ''+n+'': ''+e.message.split\\(''\\\\n''\\)[0]\\)}}console.log\\(ok+''/''+m.length+'' OK''\\)\")",
+      "Bash(node -e \"try{const m=require\\(''./src/modules/music''\\);console.log\\(''✅ music:'',Object.keys\\(m\\).join\\('', ''\\)\\)}catch\\(e\\){console.log\\(''❌ music:'',e.message.split\\(''\\\\n''\\)[0]\\)}\")",
+      "Bash(ls src/assets/bg_*)",
+      "Bash(node -e \"const Canvas = require\\(''@napi-rs/canvas''\\); console.log\\(''Canvas OK''\\); Canvas.GlobalFonts.registerFromPath\\(''./src/assets/fonts/Minecraftory.ttf'', ''Minecraftory''\\); console.log\\(''Font registered''\\); const c = Canvas.createCanvas\\(900,300\\); const ctx = c.getContext\\(''2d''\\); ctx.font = ''60px Minecraftory''; ctx.fillText\\(''TEST'', 10, 60\\); console.log\\(''Font renders OK''\\);\")"
+    ]
+  }
+}

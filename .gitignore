@@ -1,0 +1,7 @@
+node_modules/
+.env
+config.json
+src/data/*.json
+!src/data/bannedWords.js
+yt-dlp.exe
+test_*.png

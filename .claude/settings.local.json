@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm view:*)",
+      "WebSearch",
+      "WebFetch(domain:discordjs.guide)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:bestcodes.dev)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:docs.discord.com)",
+      "Bash(node -e \"const d = require\\(''discord.js''\\); console.log\\(''ContainerBuilder:'', typeof d.ContainerBuilder\\); console.log\\(''MediaGalleryBuilder:'', typeof d.MediaGalleryBuilder\\); console.log\\(''TextDisplayBuilder:'', typeof d.TextDisplayBuilder\\); console.log\\(''SeparatorBuilder:'', typeof d.SeparatorBuilder\\); console.log\\(''SeparatorSpacingSize:'', typeof d.SeparatorSpacingSize\\); console.log\\(''MessageFlags.IsComponentsV2:'', d.MessageFlags.IsComponentsV2?.toString\\(\\)\\);\")",
+      "Bash(node -e \":*)",
+      "Bash(node -e \"const mods = [''automod'',''verification'',''autoroles'',''suggestions'',''levels'',''customEmbed'',''giveaways'',''serverStats'',''transcript'',''reviews'']; for \\(const m of mods\\) { try { const mod = require\\(''./src/modules/'' + m\\); console.log\\(m + '': '' + Object.keys\\(mod\\).join\\('', ''\\)\\); } catch\\(e\\) { console.log\\(m + '': ERROR - '' + e.message.split\\(''\\\\n''\\)[0]\\); } }\")",
+      "Bash(node -e \"const mods=[''automod'',''verification'',''autoroles'',''suggestions'',''levels'',''customEmbed'',''giveaways'',''serverStats'',''transcript'',''reviews''];for\\(const m of mods\\){try{const mod=require\\(''./src/modules/''+m\\);console.log\\(m+'': ''+Object.keys\\(mod\\).join\\('', ''\\)\\);}catch\\(e\\){console.log\\(m+'': ERROR - ''+e.message.split\\(''\\\\n''\\)[0]\\);}}\")",
+      "Bash(node -e \"const mods=[''catalog'',''orders''];for\\(const m of mods\\){try{const mod=require\\(''./src/modules/''+m\\);console.log\\(m+'': ''+Object.keys\\(mod\\).join\\('', ''\\)\\);}catch\\(e\\){console.log\\(m+'': ERROR - ''+e.message.split\\(''\\\\n''\\)[0]\\);}}\")",
+      "Bash(node -e \"const m=[''automod'',''verification'',''autoroles'',''suggestions'',''levels'',''customEmbed'',''giveaways'',''serverStats'',''transcript'',''reviews'',''catalog'',''orders'',''tickets'',''logger'',''moderation'',''antiSpam'',''antiRaid'',''welcome''];let ok=0,fail=0;for\\(const n of m\\){try{require\\(''./src/modules/''+n\\);ok++;console.log\\(''✅ ''+n\\)}catch\\(e\\){fail++;console.log\\(''❌ ''+n+'': ''+e.message.split\\(''\\\\n''\\)[0]\\)}}console.log\\(''\\\\nTotal: ''+ok+''/''+m.length+'' OK''\\)\")"
+    ]
+  }
+}
