@@ -132,22 +132,9 @@ function deleteQueue(guildId) {
 
 // ─── yt-dlp helpers ─────────────────────────────────────────────────────────
 
-// Cookies para autenticación con YouTube (evita "Sign in to confirm you're not a bot")
-const COOKIES_PATH = path.resolve(__dirname, "..", "..", "cookies.txt");
-const HAS_COOKIES = fs.existsSync(COOKIES_PATH);
-if (HAS_COOKIES) console.log("[Music] Cookies de YouTube encontradas.");
-
 function ytdlpExec(args) {
-    const baseArgs = [
-        ...(HAS_COOKIES ? ["--cookies", COOKIES_PATH] : []),
-        "--extractor-args", "youtubetab:skip=authcheck",
-        "--extractor-args", "youtube:player_client=web",
-        "--remote-components", "ejs:github",
-    ];
-    const finalArgs = [...baseArgs, ...args];
-
     return new Promise((resolve, reject) => {
-        execFile(YTDLP, finalArgs, { timeout: 60000, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+        execFile(YTDLP, args, { timeout: 60000, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
             if (err) return reject(new Error(stderr?.trim()?.split("\n")[0] || err.message));
             resolve(stdout);
         });
