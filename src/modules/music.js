@@ -325,6 +325,7 @@ async function resolveStreamUrl(song) {
 
 function createAudioStream(pageUrl, streamUrl, httpHeaders = {}, filter = null) {
     const { spawn } = require("child_process");
+    const { PassThrough } = require("stream");
 
     const filterArgs = [];
     if (filter && AUDIO_FILTERS[filter]) {
@@ -342,7 +343,7 @@ function createAudioStream(pageUrl, streamUrl, httpHeaders = {}, filter = null) 
         "--no-warnings",
         "--no-check-certificates",
         "--no-playlist",
-        "-o", "-", // Output a stdout
+        "-o", "-",
         pageUrl,
     ];
 
@@ -350,40 +351,44 @@ function createAudioStream(pageUrl, streamUrl, httpHeaders = {}, filter = null) 
 
     ytdlp.stderr.on("data", (data) => {
         const msg = data.toString().trim();
-        if (msg) console.log("[Music] yt-dlp:", msg);
+        if (msg && !msg.includes("[download]")) console.log("[Music] yt-dlp:", msg);
     });
 
-    // Pipear yt-dlp → FFmpeg para convertir a PCM
+    // FFmpeg convierte a PCM raw
     const ffmpeg = spawn(ffmpegPath, [
         "-analyzeduration", "0",
-        "-loglevel", "warning",
-        "-i", "pipe:0",     // Leer de stdin (pipe de yt-dlp)
+        "-loglevel", "error",
+        "-i", "pipe:0",
         ...filterArgs,
         "-f", "s16le",
         "-ar", "48000",
         "-ac", "2",
-        "pipe:1",           // Salida a stdout
+        "pipe:1",
     ], { stdio: ["pipe", "pipe", "pipe"] });
 
-    // Conectar yt-dlp stdout → FFmpeg stdin
-    ytdlp.stdout.pipe(ffmpeg.stdin);
+    // Conectar yt-dlp → FFmpeg
+    ytdlp.stdout.pipe(ffmpeg.stdin).on("error", () => {});
+
+    // PassThrough para garantizar un Readable limpio para @discordjs/voice
+    const output = new PassThrough();
+    ffmpeg.stdout.pipe(output).on("error", () => {});
 
     ytdlp.on("error", (err) => console.error("[Music] yt-dlp spawn error:", err.message));
-    ffmpeg.on("error", (err) => {
-        if (!err.message?.includes("Premature close")) {
-            console.error("[Music] FFmpeg error:", err.message);
-        }
-    });
+    ffmpeg.on("error", () => {});
     ffmpeg.stderr.on("data", (data) => {
         const msg = data.toString().trim();
-        if (msg) console.log("[Music] FFmpeg:", msg);
+        if (msg) console.error("[Music] FFmpeg error:", msg);
     });
 
-    // Cuando uno muere, cerrar el otro
+    // Limpieza cuando uno termina
     ytdlp.on("close", () => { try { ffmpeg.stdin.end(); } catch {} });
-    ffmpeg.on("close", () => { try { ytdlp.kill(); } catch {} });
+    ffmpeg.on("close", () => { try { ytdlp.kill(); } catch {} output.end(); });
 
-    return ffmpeg.stdout;
+    // Guardar referencias para poder limpiar desde fuera
+    output._ytdlp = ytdlp;
+    output._ffmpeg = ffmpeg;
+
+    return output;
 }
 
 // ─── Embeds ─────────────────────────────────────────────────────────────────
@@ -491,12 +496,11 @@ async function playSong(guildId) {
 
         audioStream.on("data", () => {
             if (!audioStream._loggedData) {
-                console.log("[Music] FFmpeg está generando datos de audio ✓");
+                console.log("[Music] Audio streaming ✓");
                 audioStream._loggedData = true;
             }
         });
-        audioStream.on("error", (err) => console.error("[Music] FFmpeg stream error:", err.message));
-        audioStream.on("close", () => console.log("[Music] FFmpeg stream cerrado"));
+        audioStream.on("error", () => {});
 
         const resource = createAudioResource(audioStream, { inputType: StreamType.Raw, inlineVolume: true });
         resource.volume?.setVolume(1);
@@ -536,6 +540,7 @@ async function ensureQueue(message) {
             guildId: message.guild.id,
             adapterCreator: message.guild.voiceAdapterCreator,
             selfDeaf: true,
+            selfMute: false,
         });
         connection.on("stateChange", (old, curr) => {
             console.log(`[Music] Voice state: ${old.status} -> ${curr.status}`);
