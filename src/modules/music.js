@@ -157,7 +157,7 @@ const USE_EJS = process.platform === "win32";
 
 function ytdlpExec(args) {
     const baseArgs = [
-        ...(HAS_COOKIES ? ["--cookies", COOKIES_PATH] : []),
+        ...(HAS_COOKIES ? ["--cookies", COOKIES_PATH] : ["--no-cookies"]),
         "--extractor-args", "youtubetab:skip=authcheck",
         "--extractor-args", "youtube:player_client=web",
         ...(USE_EJS ? ["--remote-components", "ejs:github", "--js-runtimes", "node"] : []),
@@ -178,7 +178,7 @@ function ytdlpExec(args) {
 async function getTrackInfo(query) {
     const stdout = await ytdlpExec([
         "--dump-single-json",
-        "--format", "bestaudio/best",
+        "--format", "18/bestaudio/best",
         "--no-warnings",
         "--no-check-certificates",
         "--no-playlist",
@@ -342,11 +342,11 @@ function createAudioStream(pageUrl, streamUrl, httpHeaders = {}, filter = null) 
 
     // Usar yt-dlp para descargar y pipear a FFmpeg (evita bloqueos de YouTube)
     const ytdlpArgs = [
-        ...(HAS_COOKIES ? ["--cookies", COOKIES_PATH] : []),
+        ...(HAS_COOKIES ? ["--cookies", COOKIES_PATH] : ["--no-cookies"]),
         "--extractor-args", "youtubetab:skip=authcheck",
         "--extractor-args", "youtube:player_client=web",
         ...(USE_EJS ? ["--remote-components", "ejs:github", "--js-runtimes", "node"] : []),
-        "-f", "bestaudio/best",
+        "-f", "18/bestaudio/best",
         "--no-warnings",
         "--no-check-certificates",
         "--no-playlist",
