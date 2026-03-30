@@ -178,7 +178,7 @@ function ytdlpExec(args) {
 async function getTrackInfo(query) {
     const stdout = await ytdlpExec([
         "--dump-single-json",
-        "--format", "18/bestaudio/best",
+        "--format", "bestaudio/best",
         "--no-warnings",
         "--no-check-certificates",
         "--no-playlist",
