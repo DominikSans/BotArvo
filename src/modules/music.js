@@ -27,9 +27,15 @@ const Genius = require("genius-lyrics");
 const GeniusClient = new Genius.Client();
 
 // Detectar binario de yt-dlp según plataforma
-const YTDLP = process.platform === "win32"
-    ? path.resolve(__dirname, "..", "..", "yt-dlp.exe")
-    : path.resolve(__dirname, "..", "..", "yt-dlp");
+let YTDLP;
+if (process.platform === "win32") {
+    YTDLP = path.resolve(__dirname, "..", "..", "yt-dlp.exe");
+} else {
+    // Preferir yt-dlp de pipx (tiene plugin PO Token), sino el binario local
+    const pipxYtdlp = "/root/.local/bin/yt-dlp";
+    YTDLP = fs.existsSync(pipxYtdlp) ? pipxYtdlp : path.resolve(__dirname, "..", "..", "yt-dlp");
+    if (YTDLP === pipxYtdlp) console.log("[Music] Usando yt-dlp de pipx con PO Token plugin");
+}
 const FAVORITES_PATH = path.resolve(__dirname, "..", "data", "favorites.json");
 const MAX_FAVORITES = 50;
 const queues = new Map();
@@ -146,13 +152,15 @@ const COOKIES_PATH = path.resolve(__dirname, "..", "..", "cookies.txt");
 const HAS_COOKIES = fs.existsSync(COOKIES_PATH);
 if (HAS_COOKIES) console.log("[Music] Cookies de YouTube encontradas.");
 
+// En Linux con pipx yt-dlp, no usar --remote-components/--js-runtimes (usa plugins nativos)
+const USE_EJS = process.platform === "win32";
+
 function ytdlpExec(args) {
     const baseArgs = [
         ...(HAS_COOKIES ? ["--cookies", COOKIES_PATH] : []),
         "--extractor-args", "youtubetab:skip=authcheck",
         "--extractor-args", "youtube:player_client=web",
-        "--remote-components", "ejs:github",
-        "--js-runtimes", "node",
+        ...(USE_EJS ? ["--remote-components", "ejs:github", "--js-runtimes", "node"] : []),
     ];
     const finalArgs = [...baseArgs, ...args];
 
@@ -175,7 +183,7 @@ async function getTrackInfo(query) {
         "--no-check-certificates",
         "--no-playlist",
         "--default-search", "ytsearch",
-        "--js-runtimes", "node",
+        ...(USE_EJS ? ["--js-runtimes", "node"] : []),
         query,
     ]);
 
@@ -205,7 +213,7 @@ async function getPlaylistTracks(url) {
         "--flat-playlist",
         "--no-warnings",
         "--no-check-certificates",
-        "--js-runtimes", "node",
+        ...(USE_EJS ? ["--js-runtimes", "node"] : []),
         url,
     ]);
 
@@ -337,8 +345,7 @@ function createAudioStream(pageUrl, streamUrl, httpHeaders = {}, filter = null) 
         ...(HAS_COOKIES ? ["--cookies", COOKIES_PATH] : []),
         "--extractor-args", "youtubetab:skip=authcheck",
         "--extractor-args", "youtube:player_client=web",
-        "--remote-components", "ejs:github",
-        "--js-runtimes", "node",
+        ...(USE_EJS ? ["--remote-components", "ejs:github", "--js-runtimes", "node"] : []),
         "-f", "bestaudio/best",
         "--no-warnings",
         "--no-check-certificates",
