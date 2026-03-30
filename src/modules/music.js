@@ -152,8 +152,8 @@ const COOKIES_PATH = path.resolve(__dirname, "..", "..", "cookies.txt");
 const HAS_COOKIES = fs.existsSync(COOKIES_PATH);
 if (HAS_COOKIES) console.log("[Music] Cookies de YouTube encontradas.");
 
-// En Linux con pipx yt-dlp, no usar --remote-components/--js-runtimes (usa plugins nativos)
-const USE_EJS = process.platform === "win32";
+// EJS necesario en todas las plataformas para resolver YouTube n-challenge
+const USE_EJS = true;
 
 function ytdlpExec(args) {
     const baseArgs = [
