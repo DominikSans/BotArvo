@@ -138,10 +138,11 @@ const HAS_COOKIES = fs.existsSync(COOKIES_PATH);
 if (HAS_COOKIES) console.log("[Music] Cookies de YouTube encontradas.");
 
 function ytdlpExec(args) {
-    // Inyectar cookies + skip authcheck para playlists
     const baseArgs = [
         ...(HAS_COOKIES ? ["--cookies", COOKIES_PATH] : []),
         "--extractor-args", "youtubetab:skip=authcheck",
+        "--extractor-args", "youtube:player_client=web",
+        "--remote-components", "ejs:github",
     ];
     const finalArgs = [...baseArgs, ...args];
 
