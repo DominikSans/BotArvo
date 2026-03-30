@@ -8,10 +8,19 @@ const {
     StreamType,
 } = require("@discordjs/voice");
 const { EmbedBuilder } = require("discord.js");
-const { execFile } = require("child_process");
+const { execFile, execSync } = require("child_process");
 const path = require("path");
 const prism = require("prism-media");
-const ffmpegPath = require("ffmpeg-static");
+
+// Usar ffmpeg-static si funciona, sino el ffmpeg del sistema
+let ffmpegPath;
+try {
+    ffmpegPath = require("ffmpeg-static");
+    execSync(`"${ffmpegPath}" -version`, { stdio: "ignore" });
+} catch {
+    ffmpegPath = "ffmpeg"; // Usa el ffmpeg del sistema (apt install ffmpeg)
+    console.log("[Music] Usando ffmpeg del sistema en vez de ffmpeg-static");
+}
 const config = require("../../config.json");
 const fs = require("fs");
 const Genius = require("genius-lyrics");
@@ -143,6 +152,7 @@ function ytdlpExec(args) {
         "--extractor-args", "youtubetab:skip=authcheck",
         "--extractor-args", "youtube:player_client=web",
         "--remote-components", "ejs:github",
+        "--js-runtimes", "node",
     ];
     const finalArgs = [...baseArgs, ...args];
 
@@ -160,7 +170,7 @@ function ytdlpExec(args) {
 async function getTrackInfo(query) {
     const stdout = await ytdlpExec([
         "--dump-single-json",
-        "--format", "bestaudio[ext=webm]/bestaudio/best",
+        "--format", "bestaudio/best",
         "--no-warnings",
         "--no-check-certificates",
         "--no-playlist",
