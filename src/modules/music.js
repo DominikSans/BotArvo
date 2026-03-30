@@ -462,10 +462,25 @@ async function playSong(guildId) {
 
         if (!song.streamUrl) throw new Error("No se pudo obtener el stream de audio");
 
+        console.log(`[Music] Stream URL obtenida: ${song.streamUrl?.substring(0, 80)}...`);
         const audioStream = createAudioStream(song.streamUrl, song.httpHeaders || {}, queue.filter || null);
+
+        audioStream.on("data", () => {
+            if (!audioStream._loggedData) {
+                console.log("[Music] FFmpeg está generando datos de audio ✓");
+                audioStream._loggedData = true;
+            }
+        });
+        audioStream.on("error", (err) => console.error("[Music] FFmpeg stream error:", err.message));
+        audioStream.on("close", () => console.log("[Music] FFmpeg stream cerrado"));
+
         const resource = createAudioResource(audioStream, { inputType: StreamType.Raw, inlineVolume: true });
         resource.volume?.setVolume(1);
         queue.player.play(resource);
+
+        console.log(`[Music] Player state: ${queue.player.state.status}`);
+        console.log(`[Music] Connection state: ${queue.connection.state.status}`);
+        console.log(`[Music] Connection subscriptions: ${queue.connection.state.subscription ? 'SI' : 'NO'}`);
 
         await queue.textChannel.send({ embeds: [nowPlayingEmbed(song)] }).catch(() => {});
     } catch (error) {
