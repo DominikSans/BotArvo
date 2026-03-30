@@ -512,7 +512,8 @@ async function ensureQueue(message) {
             adapterCreator: message.guild.voiceAdapterCreator,
         });
         await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
-    } catch {
+    } catch (err) {
+        console.error("[Music] Error al conectar al canal de voz:", err);
         if (connection) try { connection.destroy(); } catch {}
         throw new Error("No pude conectarme al canal de voz.");
     }
