@@ -138,8 +138,12 @@ const HAS_COOKIES = fs.existsSync(COOKIES_PATH);
 if (HAS_COOKIES) console.log("[Music] Cookies de YouTube encontradas.");
 
 function ytdlpExec(args) {
-    // Inyectar cookies si existen
-    const finalArgs = HAS_COOKIES ? ["--cookies", COOKIES_PATH, ...args] : args;
+    // Inyectar cookies + skip authcheck para playlists
+    const baseArgs = [
+        ...(HAS_COOKIES ? ["--cookies", COOKIES_PATH] : []),
+        "--extractor-args", "youtubetab:skip=authcheck",
+    ];
+    const finalArgs = [...baseArgs, ...args];
 
     return new Promise((resolve, reject) => {
         execFile(YTDLP, finalArgs, { timeout: 60000, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
