@@ -530,12 +530,17 @@ async function ensureQueue(message) {
     let connection;
 
     try {
+        console.log(`[Music] Conectando al canal: ${voiceChannel.name} (${voiceChannel.id})`);
         connection = joinVoiceChannel({
             channelId: voiceChannel.id,
             guildId: message.guild.id,
             adapterCreator: message.guild.voiceAdapterCreator,
+            selfDeaf: true,
         });
-        await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
+        connection.on("stateChange", (old, curr) => {
+            console.log(`[Music] Voice state: ${old.status} -> ${curr.status}`);
+        });
+        await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
     } catch (err) {
         console.error("[Music] Error al conectar al canal de voz:", err);
         if (connection) try { connection.destroy(); } catch {}
